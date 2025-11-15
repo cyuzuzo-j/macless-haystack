@@ -21,7 +21,8 @@ static int set_rand_addr_count = 0;
 static int start_advertising_count = 0;
 static int stop_advertising_count = 0;
 
-esp_err_t esp_ble_gap_config_adv_data_raw(uint8_t *raw_data, uint32_t raw_data_len)
+// Wrapped function implementations (using linker --wrap option)
+esp_err_t __wrap_esp_ble_gap_config_adv_data_raw(uint8_t *raw_data, uint32_t raw_data_len)
 {
     if (raw_data == NULL || raw_data_len > MAX_ADV_DATA_LEN) {
         return ESP_ERR_INVALID_ARG;
@@ -36,30 +37,56 @@ esp_err_t esp_ble_gap_config_adv_data_raw(uint8_t *raw_data, uint32_t raw_data_l
     return ESP_OK;
 }
 
-esp_err_t esp_ble_gap_register_callback(esp_gap_ble_cb_t callback)
+esp_err_t __wrap_esp_ble_gap_register_callback(esp_gap_ble_cb_t callback)
 {
     registered_callback = callback;
     register_callback_count++;
     return ESP_OK;
 }
 
-esp_err_t esp_ble_gap_set_rand_addr(esp_bd_addr_t rand_addr)
+esp_err_t __wrap_esp_ble_gap_set_rand_addr(esp_bd_addr_t rand_addr)
 {
     memcpy(captured_rand_addr, rand_addr, sizeof(esp_bd_addr_t));
     set_rand_addr_count++;
     return ESP_OK;
 }
 
-esp_err_t esp_ble_gap_start_advertising(esp_ble_adv_params_t *adv_params)
+esp_err_t __wrap_esp_ble_gap_start_advertising(esp_ble_adv_params_t *adv_params)
 {
     start_advertising_count++;
     return ESP_OK;
 }
 
-esp_err_t esp_ble_gap_stop_advertising(void)
+esp_err_t __wrap_esp_ble_gap_stop_advertising(void)
 {
     stop_advertising_count++;
     return ESP_OK;
+}
+
+// Direct implementations for helper functions (no wrapping needed)
+esp_err_t esp_ble_gap_config_adv_data_raw(uint8_t *raw_data, uint32_t raw_data_len)
+{
+    return __wrap_esp_ble_gap_config_adv_data_raw(raw_data, raw_data_len);
+}
+
+esp_err_t esp_ble_gap_register_callback(esp_gap_ble_cb_t callback)
+{
+    return __wrap_esp_ble_gap_register_callback(callback);
+}
+
+esp_err_t esp_ble_gap_set_rand_addr(esp_bd_addr_t rand_addr)
+{
+    return __wrap_esp_ble_gap_set_rand_addr(rand_addr);
+}
+
+esp_err_t esp_ble_gap_start_advertising(esp_ble_adv_params_t *adv_params)
+{
+    return __wrap_esp_ble_gap_start_advertising(adv_params);
+}
+
+esp_err_t esp_ble_gap_stop_advertising(void)
+{
+    return __wrap_esp_ble_gap_stop_advertising();
 }
 
 esp_err_t mock_esp_ble_gap_get_last_adv_data(uint8_t *data, uint32_t *len)

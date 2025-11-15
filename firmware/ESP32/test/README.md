@@ -4,7 +4,15 @@ This directory contains unit tests for the OpenHaystack ESP32 firmware.
 
 ## Overview
 
-The test suite verifies that the firmware correctly implements non-rolling code behavior, which is essential for the Find My network integration.
+The test suite verifies that the firmware correctly implements non-rolling code behavior, which is essential for the Find My network integration. The tests now include **CMock-based integration tests** to verify system-level behavior.
+
+## Testing Frameworks
+
+### Unity Test Framework
+Used for basic unit tests of individual functions.
+
+### CMock
+Used for mocking ESP-IDF BLE GAP API functions to enable integration testing without requiring actual Bluetooth hardware.
 
 ## Non-Rolling Codes
 
@@ -15,12 +23,13 @@ The firmware uses **non-rolling codes**, meaning the same advertising key is reu
 - The same public key always generates the same advertising payload
 - Keys are reused across multiple cycles (non-rolling behavior)
 - Different keys produce different addresses and payloads
+- **NEW:** Multiple advertisement runs use identical data within the same key cycle
 
 ## Test Structure
 
-### `test_non_rolling_codes.c`
+### Test Group: `non_rolling_codes`
 
-This test file contains unit tests that verify:
+This test group contains unit tests that verify:
 
 1. **Deterministic address generation** - Same key produces same address every time
 2. **Deterministic payload generation** - Same key produces same payload every time
@@ -28,6 +37,34 @@ This test file contains unit tests that verify:
 4. **Payload content** - Correct encoding of public key material
 5. **Multiple reuse** - Calling functions multiple times with same key produces identical results
 6. **Key differentiation** - Different keys produce different outputs
+
+### Test Group: `openhaystack_integration` (NEW)
+
+This test group uses CMock to verify system-level behavior:
+
+1. **multiple_runs_same_adv_data_within_cycle** - Verifies that `esp_ble_gap_config_adv_data_raw` receives identical advertising data across multiple runs within the same key cycle, proving non-rolling behavior at the system level.
+
+## CMock Implementation
+
+The test suite includes a custom mock implementation for ESP-IDF BLE GAP API functions:
+
+### Mock Files
+- `main/mocks/mock_esp_gap_ble_api.h` - Mock header
+- `main/mocks/mock_esp_gap_ble_api.c` - Mock implementation
+
+### Mocked Functions
+- `esp_ble_gap_config_adv_data_raw()` - Captures advertising data for verification
+- `esp_ble_gap_register_callback()` - Mocks callback registration
+- `esp_ble_gap_set_rand_addr()` - Mocks address setting
+- `esp_ble_gap_start_advertising()` - Mocks advertising start
+- `esp_ble_gap_stop_advertising()` - Mocks advertising stop
+
+### Mock Helper Functions
+- `mock_esp_ble_gap_reset()` - Resets all mock state
+- `mock_esp_ble_gap_get_config_adv_data_call_count()` - Returns number of times adv data was configured
+- `mock_esp_ble_gap_get_adv_data_at_index()` - Retrieves captured advertising data from a specific call
+
+The mocks use linker wrapping (`--wrap`) to intercept calls to real ESP-IDF functions without modifying the production code.
 
 ## Running Tests
 
