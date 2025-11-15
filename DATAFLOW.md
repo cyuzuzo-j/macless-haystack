@@ -19,7 +19,7 @@ flowchart TB
     subgraph User["User Domain"]
         U[User]
         GenKeys[generate_keys.py]
-        KeyFiles[(Key Files<br/>- Private Keys<br/>- Advertisement Keys<br/>- Hashed Keys)]
+        KeyFiles[(Key Files<br/>- Private Keys<br/>- Public Keys<br/>)]
     end
 
     subgraph BLE["BLE Device Domain"]
