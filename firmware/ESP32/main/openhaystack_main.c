@@ -3,7 +3,9 @@
 #include <stdbool.h>
 #include <stdio.h>
 
+#include "openhaystack.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/projdefs.h"
 #include "freertos/task.h"
 
 #include "nvs_flash.h"
@@ -11,8 +13,6 @@
 
 #include "esp_bt.h"
 #include "esp_gap_ble_api.h"
-#include "esp_gattc_api.h"
-#include "esp_gatt_defs.h"
 #include "esp_bt_main.h"
 #include "esp_bt_defs.h"
 #include "esp_log.h"
@@ -23,6 +23,7 @@
 Higher delay = less power consumption, but more inaccurate tracking
  */
 #define DELAY_IN_S 60
+
 /* Define how often (long) a key will be reused after switching to the next one
 This is for using less keys after all. The interval for one key is (DELAY_IN_S * REUSE_CYCLES => 60s * 30 cycles = changes key every 30 min)
 Smaller number of cycles = key changes more often, but more keys needed.
@@ -72,6 +73,7 @@ static esp_ble_adv_params_t ble_adv_params = {
     // Allow both scan and connection requests from anyone.
     .adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY,
 };
+
 
 int load_bytes_from_partition(uint8_t *dst, size_t size, int offset)
 {
@@ -156,8 +158,13 @@ uint8_t get_key_count()
     ESP_LOGE(LOG_TAG, "Found %i keys", keyCount[0]);
     return keyCount[0];
 }
+
 static uint8_t public_key[28];
-void app_main(void)
+RTC_DATA_ATTR uint8_t key_count;
+RTC_DATA_ATTR uint8_t key_index;
+RTC_DATA_ATTR uint8_t cycle = 0;
+
+int openhaystack_init(void)
 {
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
@@ -169,67 +176,76 @@ void app_main(void)
     esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, ESP_PWR_LVL_P9);
     esp_bluedroid_enable();
 
-    ESP_LOGI(LOG_TAG, "application initialized");
-
-    /* Start with a random index */
-    uint8_t key_count = get_key_count();
-    uint8_t key_index = (esp_random() % key_count);
-    uint8_t cycle = 0;
-    while (true)
-    {
-        esp_err_t status;
-        // Shift for keycount size + keylength * index
-        int address = 1 + (key_index * sizeof(public_key));
-        ESP_LOGI(LOG_TAG, "Loading key with index %d at address %d", key_index, address);
-        if (load_bytes_from_partition(public_key, sizeof(public_key), address) != ESP_OK)
-        {
-            ESP_LOGE(LOG_TAG, "Could not read the key, stopping.");
-            return;
+    if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_UNDEFINED) {
+        /* Start with a random index */
+        key_count = get_key_count();
+        if (key_count == 0) {
+            return 1;
         }
-        ESP_LOGI(LOG_TAG, "using key with start %02x %02x", public_key[0], public_key[1]);
-        set_addr_from_key(rnd_addr, public_key);
-        set_payload_from_key(adv_data, public_key);
-
-        ESP_LOGI(LOG_TAG, "using device address: %02x %02x %02x %02x %02x %02x", rnd_addr[0], rnd_addr[1], rnd_addr[2], rnd_addr[3], rnd_addr[4], rnd_addr[5]);
-        // register the scan callback function to the gap module
-        if ((status = esp_ble_gap_register_callback(esp_gap_cb)) != ESP_OK)
-        {
-            ESP_LOGE(LOG_TAG, "gap register error: %s", esp_err_to_name(status));
-            return;
-        }
-
-        if ((status = esp_ble_gap_set_rand_addr(rnd_addr)) != ESP_OK)
-        {
-            ESP_LOGE(LOG_TAG, "couldn't set random address: %s", esp_err_to_name(status));
-            return;
-        }
-        if ((esp_ble_gap_config_adv_data_raw((uint8_t *)&adv_data, sizeof(adv_data))) != ESP_OK)
-        {
-            ESP_LOGE(LOG_TAG, "couldn't configure BLE adv: %s", esp_err_to_name(status));
-            return;
-        }
-        ESP_LOGI(LOG_TAG, "Sending beacon (with key index %d)", key_index);
-        vTaskDelay(10);
-        esp_ble_gap_stop_advertising(); // Stop immediately after first beacon
-
-        vTaskDelay(10);
-        ESP_LOGI(LOG_TAG, "Going to sleep");
-        vTaskDelay(10);
-        esp_sleep_enable_timer_wakeup(DELAY_IN_S * 1000000); // sleep
-        esp_light_sleep_start();
-
-        // Execution continues here after wakeup
-        ESP_LOGI(LOG_TAG, "Returned from light sleep");
-        if (cycle >= REUSE_CYCLES)
-        {
-            ESP_LOGI(LOG_TAG, "Max cycles %d are reached. Changing key ", cycle);
-            key_index = (key_index + 1) % key_count; // Back to zero if out of range
-            cycle = 0;
-        }
-        else
-        {
-            ESP_LOGI(LOG_TAG, "Current cycle is %d. Reusing key. ", cycle);
-            cycle++;
-        }
+        key_index = (esp_random() % key_count);
+        ESP_LOGI(LOG_TAG, "OpenHaystack initialized with %d keys", key_count);
     }
+
+    return 0;
+}
+
+void openhaystack_run(void)
+{
+    esp_err_t status;
+    // Shift for keycount size + keylength * index
+    int address = 1 + (key_index * sizeof(public_key));
+    ESP_LOGI(LOG_TAG, "Loading key with index %d at address %d", key_index, address);
+    if (load_bytes_from_partition(public_key, sizeof(public_key), address) != ESP_OK)
+    {
+        ESP_LOGE(LOG_TAG, "Could not read the key, stopping.");
+        return;
+    }
+    ESP_LOGI(LOG_TAG, "using key with start %02x %02x", public_key[0], public_key[1]);
+    set_addr_from_key(rnd_addr, public_key);
+    set_payload_from_key(adv_data, public_key);
+
+    ESP_LOGI(LOG_TAG, "using device address: %02x %02x %02x %02x %02x %02x", rnd_addr[0], rnd_addr[1], rnd_addr[2], rnd_addr[3], rnd_addr[4], rnd_addr[5]);
+    // register the scan callback function to the gap module
+    if ((status = esp_ble_gap_register_callback(esp_gap_cb)) != ESP_OK)
+    {
+        ESP_LOGE(LOG_TAG, "gap register error: %s", esp_err_to_name(status));
+        return;
+    }
+
+    if ((status = esp_ble_gap_set_rand_addr(rnd_addr)) != ESP_OK)
+    {
+        ESP_LOGE(LOG_TAG, "couldn't set random address: %s", esp_err_to_name(status));
+        return;
+    }
+    if ((esp_ble_gap_config_adv_data_raw((uint8_t *)&adv_data, sizeof(adv_data))) != ESP_OK)
+    {
+        ESP_LOGE(LOG_TAG, "couldn't configure BLE adv: %s", esp_err_to_name(status));
+        return;
+    }
+    ESP_LOGI(LOG_TAG, "Sending beacon (with key index %d)", key_index);
+    vTaskDelay(10);
+    esp_ble_gap_stop_advertising(); // Stop immediately after first beacon
+
+    if (cycle >= REUSE_CYCLES)
+    {
+        ESP_LOGI(LOG_TAG, "Max cycles %d are reached. Changing key ", cycle);
+        key_index = (key_index + 1) % key_count; // Back to zero if out of range
+        cycle = 0;
+    }
+    else
+    {
+        ESP_LOGI(LOG_TAG, "Current cycle is %d. Reusing key. ", cycle);
+        cycle++;
+    }
+
+    ESP_ERROR_CHECK(esp_bluedroid_disable());
+    ESP_ERROR_CHECK(esp_bluedroid_deinit());
+    ESP_ERROR_CHECK(esp_bt_controller_disable());
+    ESP_ERROR_CHECK(esp_bt_controller_deinit());
+
+    vTaskDelay(10);
+    ESP_LOGI(LOG_TAG, "Going to sleep");
+    vTaskDelay(10);
+    esp_sleep_enable_timer_wakeup(DELAY_IN_S * 1000000); // sleep
+    esp_deep_sleep_start();
 }

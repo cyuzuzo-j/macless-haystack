@@ -21,7 +21,7 @@ config.read(getConfigPath() + '/config.ini')
 
 
 def getAnisetteServer():
-    return config.get('Settings', 'anisette_url', fallback='http://anisette:6969')
+    return config.get('Settings', 'anisette_url', fallback='http://localhost:6969')
 
 
 def getPort():
