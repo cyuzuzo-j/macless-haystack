@@ -67,11 +67,11 @@ flowchart TB
     Anisette -->|10. Return device<br/>metadata| Endpoint
     Endpoint -->|11. Authenticate with<br/>Apple credentials| Auth
     Auth -->|12. GSA/iCloud<br/>authentication| AppleServers
-    AppleServers -->|13. Return auth tokens<br/>(dsid, searchPartyToken)| Auth
+    AppleServers -->|13. Return auth tokens<br/>dsid, searchPartyToken| Auth
     Auth -->|14. Store tokens| Config
 
     %% Report Fetching Flow
-    FlutterApp -->|15. Request location<br/>updates (hashed keys)| ReportsFetcher
+    FlutterApp -->|15. Request location<br/>updates with hashed keys| ReportsFetcher
     ReportsFetcher -->|16. POST /fetch<br/>+ credentials| Endpoint
     Endpoint -->|17. Verify auth| Config
     Endpoint -->|18. Generate anisette| Anisette
@@ -82,7 +82,7 @@ flowchart TB
     AppleServers -->|23. Send encrypted<br/>reports| Endpoint
     Endpoint -->|24. Filter by date<br/>and return JSON| ReportsFetcher
     ReportsFetcher -->|25. Encrypted<br/>reports| Decrypt
-    Decrypt -->|26. Decrypt with<br/>private key (ECDH)| Display
+    Decrypt -->|26. Decrypt with<br/>private key via ECDH| Display
     Display -->|27. Show locations<br/>on map| U
 
     %% Styling
