@@ -11,6 +11,7 @@ This project tries to unify several projects for an easy-to-use and easy-to-setu
 
 ## Table of Contents
 
+- [Architecture](#architecture)
 - [Setup](#setup)
   - [Prerequisites](#prerequisites)
   - [Hardware setup](#hardware-setup)
@@ -19,6 +20,15 @@ This project tries to unify several projects for an easy-to-use and easy-to-setu
 - [Problems / Issues / Questions](#problems--issues--questions)
 - [Included projects and changes](#included-projects-and-changes)
 - [Screenshots](#screenshots)
+
+## Architecture
+
+For a detailed understanding of how data flows through the Macless-Haystack system, see the [**Dataflow Diagram**](DATAFLOW.md). This diagram illustrates the complete architecture including:
+- Key generation and deployment process
+- BLE device advertisement broadcasting
+- Apple Find My network integration
+- Backend authentication and report fetching
+- Frontend decryption and visualization
 
 ## Setup
 
