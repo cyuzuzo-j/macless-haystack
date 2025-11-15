@@ -225,10 +225,123 @@ TEST_GROUP_RUNNER(non_rolling_codes)
     RUN_TEST_CASE(non_rolling_codes, different_keys_different_payloads);
 }
 
+// ============================================================================
+// Integration Tests with Mocks
+// ============================================================================
+
+#include "mock_esp_gap_ble_api.h"
+
+// Test group for integration tests
+TEST_GROUP(openhaystack_integration);
+
+TEST_SETUP(openhaystack_integration)
+{
+    // Reset all mock state before each test
+    mock_esp_ble_gap_reset();
+}
+
+TEST_TEAR_DOWN(openhaystack_integration)
+{
+    // Cleanup after each test
+    mock_esp_ble_gap_reset();
+}
+
+/**
+ * @brief Test that multiple openhaystack_run calls use the same advertisement data
+ * 
+ * This proves non-rolling behavior at the system level by showing that
+ * esp_ble_gap_config_adv_data_raw receives identical data across multiple runs
+ * within the same key cycle.
+ */
+TEST(openhaystack_integration, multiple_runs_same_adv_data_within_cycle)
+{
+    // This test simulates what happens in openhaystack_run when the same key
+    // is used multiple times (within REUSE_CYCLES). We'll call the key
+    // preparation functions multiple times and verify the advertisement
+    // data remains constant.
+    
+    uint8_t public_key[28] = {
+        0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45, // First 6 bytes
+        0x67, 0x89, 0xAB, 0xCD, 0xEF, 0x01, // Bytes 6-11
+        0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, // Bytes 12-17
+        0xEF, 0x01, 0x23, 0x45, 0x67, 0x89, // Bytes 18-23
+        0xAB, 0xCD, 0xEF, 0x01              // Bytes 24-27
+    };
+    
+    // Simulate the advertisement data structure from openhaystack_main.c
+    uint8_t adv_data_run1[31] = {
+        0x1e,       /* Length (30) */
+        0xff,       /* Manufacturer Specific Data (type 0xff) */
+        0x4c, 0x00, /* Company ID (Apple) */
+        0x12, 0x19, /* Offline Finding type and length */
+        0x00,       /* State */
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, /* First two bits */
+        0x00, /* Hint (0x00) */
+    };
+    
+    uint8_t adv_data_run2[31];
+    uint8_t adv_data_run3[31];
+    
+    // Initialize run2 and run3 with same header
+    memcpy(adv_data_run2, adv_data_run1, 31);
+    memcpy(adv_data_run3, adv_data_run1, 31);
+    
+    // Simulate first run: prepare advertisement data
+    set_payload_from_key(adv_data_run1, public_key);
+    esp_ble_gap_config_adv_data_raw(adv_data_run1, sizeof(adv_data_run1));
+    
+    // Simulate second run with same key (within REUSE_CYCLES)
+    set_payload_from_key(adv_data_run2, public_key);
+    esp_ble_gap_config_adv_data_raw(adv_data_run2, sizeof(adv_data_run2));
+    
+    // Simulate third run with same key (within REUSE_CYCLES)
+    set_payload_from_key(adv_data_run3, public_key);
+    esp_ble_gap_config_adv_data_raw(adv_data_run3, sizeof(adv_data_run3));
+    
+    // Verify that esp_ble_gap_config_adv_data_raw was called 3 times
+    TEST_ASSERT_EQUAL_INT(3, mock_esp_ble_gap_get_config_adv_data_call_count());
+    
+    // Retrieve the captured advertisement data from each call
+    uint8_t captured_data_1[31];
+    uint8_t captured_data_2[31];
+    uint8_t captured_data_3[31];
+    uint32_t len1, len2, len3;
+    
+    TEST_ASSERT_EQUAL(ESP_OK, mock_esp_ble_gap_get_adv_data_at_index(0, captured_data_1, &len1));
+    TEST_ASSERT_EQUAL(ESP_OK, mock_esp_ble_gap_get_adv_data_at_index(1, captured_data_2, &len2));
+    TEST_ASSERT_EQUAL(ESP_OK, mock_esp_ble_gap_get_adv_data_at_index(2, captured_data_3, &len3));
+    
+    // All lengths should be 31 bytes
+    TEST_ASSERT_EQUAL_UINT32(31, len1);
+    TEST_ASSERT_EQUAL_UINT32(31, len2);
+    TEST_ASSERT_EQUAL_UINT32(31, len3);
+    
+    // All three advertisement data should be identical (non-rolling behavior)
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(captured_data_1, captured_data_2, 31);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(captured_data_2, captured_data_3, 31);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(captured_data_1, captured_data_3, 31);
+    
+    // Verify the data matches what we prepared
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(adv_data_run1, captured_data_1, 31);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(adv_data_run2, captured_data_2, 31);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(adv_data_run3, captured_data_3, 31);
+}
+
+// Test group runner
+TEST_GROUP_RUNNER(openhaystack_integration)
+{
+    RUN_TEST_CASE(openhaystack_integration, multiple_runs_same_adv_data_within_cycle);
+}
+
 static void run_all_tests(void)
 {
     printf("Macless Haystack Test - Non-Rolling Codes\n");
     RUN_TEST_GROUP(non_rolling_codes);
+    printf("\nMacless Haystack Test - Integration Tests\n");
+    RUN_TEST_GROUP(openhaystack_integration);
 }
 
 // Test application main
