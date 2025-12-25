@@ -15,38 +15,48 @@ Macless-Haystack is a distributed system for tracking BLE devices using Apple's 
 ## Dataflow Diagram
 
 ```mermaid
-flowchart TB
-    subgraph User["User Domain"]
+flowchart LR
+    subgraph UserDomain ["User Domain"]
+        direction TB
         U[User]
         GenKeys[generate_keys.py]
-        KeyFiles[(Key Files<br/>- Private Keys<br/>- Public Keys<br/>)]
+        KeyFiles[(Key Files<br/>- Private Keys<br/>- Public Keys)]
     end
 
-    subgraph BLE["BLE Device Domain"]
+    subgraph BLE ["BLE Device Domain"]
+        direction TB
         ESP32[ESP32/NRF5x<br/>Firmware]
         BLEAdv[BLE Advertisement<br/>Broadcast]
     end
 
-    subgraph Apple["Apple Find My Network"]
-        AppleDevices[Apple Devices<br/>iPhone/iPad/Mac]
-        AppleServers[Apple iCloud<br/>Servers]
-        FindMyDB[(Location Reports<br/>Database)]
-    end
-
-    subgraph Backend["Backend Endpoint (Python)"]
-        Endpoint[mh_endpoint.py<br/>HTTP Server]
-        Auth[apple_cryptography.py<br/>pypush_gsa_icloud.py<br/>Authentication]
-        Config[(auth.json<br/>config.ini)]
-        Anisette[Anisette Server<br/>Device Provisioning]
-    end
-
-    subgraph Frontend["Frontend Application (Flutter)"]
+    subgraph Frontend ["Frontend Application (Flutter)"]
+        direction TB
         FlutterApp[Flutter Web/Mobile App]
         ReportsFetcher[reports_fetcher.dart<br/>HTTP Client]
         Decrypt[decrypt_reports.dart<br/>AES-GCM Decryption]
         Display[Map & UI<br/>Location Display]
     end
 
+    subgraph Backend ["Backend Endpoint (Python)"]
+        direction TB
+        Endpoint[mh_endpoint.py<br/>HTTP Server]
+        Auth[apple_cryptography.py<br/>pypush_gsa_icloud.py<br/>Authentication]
+        Config[(auth.json<br/>config.ini)]
+    end
+
+    subgraph AnisetteDomain ["Anisette Server"]
+        Anisette[Anisette Server<br/>Device Provisioning]
+    end
+
+    subgraph Apple ["Apple Find My Network"]
+        direction TB
+        AppleDevices[Apple Devices<br/>iPhone/iPad/Mac]
+        AppleServers[Apple iCloud<br/>Servers]
+    end
+    subgraph OperatorDomain ["Operator"]
+        direction TB
+        Operator[Operator]
+    end
     %% Key Generation Flow
     U -->|1. Run| GenKeys
     GenKeys -->|2. Generate keypairs| KeyFiles
@@ -54,17 +64,16 @@ flowchart TB
     KeyFiles -->|3b. Import JSON| FlutterApp
 
     %% BLE Advertisement Flow
-    ESP32 -->|4. Broadcast every 2s| BLEAdv
+    ESP32 -->|4. Broadcast every 60s| BLEAdv
     BLEAdv -.->|5. Receive broadcasts| AppleDevices
 
     %% Apple Network Flow
     AppleDevices -->|6. Upload encrypted<br/>location reports| AppleServers
-    AppleServers -->|7. Store reports| FindMyDB
 
     %% Authentication Flow
-    U -->|8. Provide Apple ID<br/>+ 2FA| Endpoint
-    Endpoint -->|9. Request anisette<br/>headers| Anisette
-    Anisette -->|10. Return device<br/>metadata| Endpoint
+    Operator -->|8. Provide Apple ID<br/>+ 2FA| Endpoint
+    Auth -->|9. Request anisette<br/>headers| Anisette
+    Anisette -->|10. Return device<br/>metadata| Auth
     Endpoint -->|11. Authenticate with<br/>Apple credentials| Auth
     Auth -->|12. GSA/iCloud<br/>authentication| AppleServers
     AppleServers -->|13. Return auth tokens<br/>dsid, searchPartyToken| Auth
@@ -74,15 +83,11 @@ flowchart TB
     FlutterApp -->|15. Request location<br/>updates with hashed keys| ReportsFetcher
     ReportsFetcher -->|16. POST /fetch<br/>+ credentials| Endpoint
     Endpoint -->|17. Verify auth| Config
-    Endpoint -->|18. Generate anisette| Anisette
-    Anisette -->|19. Headers| Endpoint
     Endpoint -->|20. Fetch reports<br/>from iCloud| AppleServers
-    AppleServers -->|21. Query database| FindMyDB
-    FindMyDB -->|22. Return encrypted<br/>location reports| AppleServers
     AppleServers -->|23. Send encrypted<br/>reports| Endpoint
     Endpoint -->|24. Filter by date<br/>and return JSON| ReportsFetcher
     ReportsFetcher -->|25. Encrypted<br/>reports| Decrypt
-    Decrypt -->|26. Decrypt with<br/>private key via ECDH| Display
+    Decrypt -->|26. Decrypted reports| Display
     Display -->|27. Show locations<br/>on map| U
 
     %% Styling
@@ -91,13 +96,14 @@ flowchart TB
     classDef appleClass fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
     classDef backendClass fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
     classDef frontendClass fill:#fff9c4,stroke:#f57f17,stroke-width:2px
+    classDef anisetteClass fill:#fce4ec,stroke:#880e4f,stroke-width:2px
 
-    class U,GenKeys,KeyFiles userClass
-    class ESP32,BLEAdv bleClass
-    class AppleDevices,AppleServers,FindMyDB appleClass
-    class Endpoint,Auth,Config,Anisette backendClass
-    class FlutterApp,ReportsFetcher,Decrypt,Display frontendClass
-```
+    class U,GenKeys,KeyFiles,UserDomain userClass
+    class ESP32,BLEAdv,BLE bleClass
+    class AppleDevices,AppleServers,FindMyDB,Apple appleClass
+    class Endpoint,Auth,Config,Backend backendClass
+    class FlutterApp,ReportsFetcher,Decrypt,Display,Frontend frontendClass
+    class Anisette,AnisetteDomain anisetteClass```
 
 ## Detailed Data Flow Description
 
