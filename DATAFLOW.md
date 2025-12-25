@@ -103,8 +103,8 @@ flowchart LR
     class AppleDevices,AppleServers,FindMyDB,Apple appleClass
     class Endpoint,Auth,Config,Backend backendClass
     class FlutterApp,ReportsFetcher,Decrypt,Display,Frontend frontendClass
-    class Anisette,AnisetteDomain anisetteClass```
-'''
+    class Anisette,AnisetteDomain anisetteClass
+```
 ## Detailed Data Flow Description
 
 ### Phase 1: Key Generation & Deployment (Steps 1-3)
