@@ -49,6 +49,28 @@ class AccessoryRegistry extends ChangeNotifier {
     } else {
       _accessories = [];
     }
+
+    bool changed = false;
+    // Use Future.wait to refill keys in parallel
+    List<Future<void>> futures = [];
+    for (var acc in _accessories) {
+      if (acc.symmetricKey != null) {
+        // Ensure 7 days coverage
+        futures.add(acc.refillRollingKeys(7).then((_) {
+          // Marking as changed within the future completion if needed,
+          // but simpler to just mark changed=true if any future runs.
+          // However, refilling keys might not actually change anything if cache is full.
+          // The original logic marked changed=true if symmetricKey != null.
+        }));
+      }
+    }
+    if (futures.isNotEmpty) {
+      await Future.wait(futures);
+      changed = true;
+    }
+    if (changed) {
+      _storeAccessories();
+    }
     await loadHistory();
 
     loading = false;
@@ -83,17 +105,8 @@ class AccessoryRegistry extends ChangeNotifier {
     for (var i = 0; i < currentAccessories.length; i++) {
       var accessory = currentAccessories.elementAt(i);
 
-      var keyPair =
-          await FindMyController.getKeyPair(accessory.hashedPublicKey);
-
-      List<FindMyKeyPair> hashedPublicKeys =
-          await Stream.fromIterable(accessory.additionalKeys)
-              .asyncMap((hashedPublicKey) =>
-                  FindMyController.getKeyPair(hashedPublicKey))
-              .toList();
-
-      hashedPublicKeys.add(keyPair);
-
+      List<FindMyKeyPair> hashedPublicKeys = await accessory.getAllKeys();
+      logger.i('Found ${hashedPublicKeys.length} keys for ${accessory.id} AA');
       var locationRequest =
           FindMyController.computeResults(hashedPublicKeys, url);
       runningLocationRequests.add(locationRequest);
@@ -175,20 +188,28 @@ class AccessoryRegistry extends ChangeNotifier {
   }
 
   /// Adds a new accessory to this registry.
-  void addAccessory(Accessory accessory) {
-    Accessory? foundOne;
-    for (var acc in _accessories) {
-      if (accessory.hashedPublicKey == acc.hashedPublicKey) {
-        foundOne = acc;
-        break; // There is already one with this id
-      }
-    }
-    if (foundOne != null) {
-      _accessories.remove(foundOne);
+  Future<void> addAccessory(Accessory accessory) async {
+    logger.d('AccessoryRegistry: Adding accessory ${accessory.id}...');
+    if (_accessories.any((element) => element.id == accessory.id)) {
+      var existing = _accessories.firstWhere((a) => a.id == accessory.id);
+      logger.d('Accessory already exists, updating...');
+      existing.update(accessory);
+      // Refill keys after update to ensure cache is valid
+      await existing.refillRollingKeys(7);
+    } else {
+      logger.d('New accessory, adding to list...');
+      // Ensure we have keys generated before using
+      await accessory.refillRollingKeys(7);
+      _accessories.add(accessory);
     }
 
-    _accessories.add(accessory);
-    _storeAccessories();
+    logger.d('AccessoryRegistry: Saving accessories list...');
+    var start = DateTime.now();
+    await _storeAccessories();
+    var elapsed = DateTime.now().difference(start);
+    logger.d(
+        'AccessoryRegistry: Saved accessories in ${elapsed.inMilliseconds}ms');
+
     notifyListeners();
   }
 

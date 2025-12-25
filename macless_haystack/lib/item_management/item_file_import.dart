@@ -9,8 +9,11 @@ import 'package:macless_haystack/accessory/accessory_model.dart';
 import 'package:macless_haystack/accessory/accessory_registry.dart';
 import 'package:macless_haystack/findMy/find_my_controller.dart';
 import 'package:macless_haystack/item_management/loading_spinner.dart';
+import 'package:logger/logger.dart';
 
 class ItemFileImport extends StatefulWidget {
+  static final logger = Logger(printer: PrettyPrinter(methodCount: 0));
+
   /// The path to the file to import from.
   final Uint8List bytes;
 
@@ -133,16 +136,46 @@ class _ItemFileImportState extends State<ItemFileImport> {
       icon = accessoryDTO.icon;
     }
 
-    List<String> additionalPublicKeys = await Stream.fromIterable(
-            accessoryDTO.additionalKeys as List)
-        .asyncMap((addPrivKey) => FindMyController.importKeyPair(addPrivKey))
-        .map((event) => event.hashedPublicKey)
-        .toList();
+    ItemFileImport.logger
+        .d('Starting import of accessory: ${accessoryDTO.name}');
 
+    // Check if accessory already exists
+    if (registry.accessories.any((a) => a.id == accessoryDTO.id.toString())) {
+      ItemFileImport.logger
+          .w('Accessory ${accessoryDTO.id} already exists. Skipping.');
+      return;
+    }
+
+    ItemFileImport.logger.d('Importing key pair...');
+    // Only import master key to secure storage
     var keyPair = await FindMyController.importKeyPair(accessoryDTO.privateKey);
+    ItemFileImport.logger.d('Master key imported.');
+
+    // Rolling keys handling
+    List<String> additionalPublicKeys = [];
+    String? symmetricKey;
+    DateTime? symmetricKeyDate;
+
+    if (accessoryDTO.symmetricKey != null &&
+        accessoryDTO.symmetricKey!.isNotEmpty) {
+      ItemFileImport.logger.d(
+          'Symmetric key found. Setting up seed for rolling key generation.');
+
+      symmetricKey = accessoryDTO.symmetricKey;
+      // Use provided date or now if missing
+      symmetricKeyDate = accessoryDTO.symmetricKeyDate != null
+          ? DateTime.fromMillisecondsSinceEpoch(accessoryDTO.symmetricKeyDate!)
+          : DateTime.now();
+    } else {
+      if (accessoryDTO.additionalKeys != null) {
+        additionalPublicKeys.addAll(accessoryDTO.additionalKeys!);
+      }
+    }
+
+    ItemFileImport.logger.d('Creating Accessory object...');
 
     Accessory newAccessory = Accessory(
-        datePublished: DateTime(1970),
+        datePublished: DateTime(2025),
         hashedPublicKey: keyPair.hashedPublicKey,
         id: accessoryDTO.id.toString(),
         name: accessoryDTO.name,
@@ -151,9 +184,11 @@ class _ItemFileImportState extends State<ItemFileImport> {
         isActive: accessoryDTO.isActive,
         lastLocation: null,
         hashesWithTS: {},
-        locationHistory: [],
         lastBatteryStatus: null,
-        additionalKeys: additionalPublicKeys);
+        locationHistory: [],
+        additionalKeys: additionalPublicKeys,
+        symmetricKey: symmetricKey,
+        symmetricKeyDate: symmetricKeyDate);
 
     registry.addAccessory(newAccessory);
   }

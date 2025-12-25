@@ -43,6 +43,71 @@ class Accessory {
     printer: PrettyPrinter(methodCount: 0),
   );
 
+  // In-memory cache of rolling keys (to avoid storage reads)
+  List<FindMyKeyPair> _cachedRollingKeys = [];
+
+  /// Ensure we have rolling keys for the next [days] days.
+  Future<void> refillRollingKeys(int days) async {
+    if (symmetricKey == null || symmetricKey!.isEmpty) {
+      return;
+    }
+
+    // Default start date to now if not set (should handle import case)
+    DateTime startDate = DateTime.now();
+
+    // Target date we want to cover
+    DateTime targetDate = DateTime.now().add(Duration(days: days));
+
+    // Calculate current coverage based on symmetricKeyDate + cached keys
+    // derived keys are one per hour.
+    DateTime coverageDate =
+        startDate.add(Duration(hours: _cachedRollingKeys.length));
+
+    // If we are already covered
+    if (coverageDate.isAfter(targetDate) && _cachedRollingKeys.isNotEmpty) {
+      logger.d(
+          'Keys covered until $coverageDate (target $targetDate). Cache size: ${_cachedRollingKeys.length}. SymmetricKeyDate: $symmetricKeyDate');
+      return;
+    }
+    if (_cachedRollingKeys.isEmpty) {
+      logger.d(
+          'No cached rolling keys found. Generating new keys from $startDate (symmetric key date)');
+    }
+
+    // Calculate how many hours (keys) we need to generate from START
+    Duration diff = targetDate.difference(startDate);
+    int hoursNeeded = diff.inHours + 24; // buffer
+
+    // Safety Cap: Don't generate too many if old key. Max 2000 (approx 3 months)
+    if (hoursNeeded > 2000) {
+      hoursNeeded = 2000;
+      logger.w("Capping key generation to 2000 keys.");
+    }
+
+    if (hoursNeeded <= 0) return;
+
+    logger.i(
+        'Refilling rolling keys: generating $hoursNeeded keys from $startDate (symmetric key date)');
+
+    try {
+      Map<String, dynamic> result = await FindMyController.deriveRollingKeys(
+          await getPrivateKey(), symmetricKey!, hoursNeeded);
+
+      List<FindMyKeyPair> newKeys = result['keys'];
+      // We do NOT update symmetricKey to nextSymKey to ensure we can regenerate on restart.
+      // String nextSymKey = result['nextSymmetricKey'];
+
+      // We replace the cache to ensure it matches the sequence starting from symmetricKey
+      _cachedRollingKeys.clear();
+      _cachedRollingKeys.addAll(newKeys);
+
+      // We verify the coverage
+      logger.i('Cache refilled. New size: ${_cachedRollingKeys.length}');
+    } catch (e) {
+      logger.e("Error refreshing rolling keys: $e");
+    }
+  }
+
   /// The ID of the accessory key.
   String id;
 
@@ -53,6 +118,12 @@ class Accessory {
   /// The display name of the accessory.
   String name;
   List<String> additionalKeys;
+
+  /// The symmetric key used for rolling key generation (base64).
+  String? symmetricKey;
+
+  /// The date when the next rolling key generation should start (or date of cached key).
+  DateTime? symmetricKeyDate;
 
   /// The display icon of the accessory.
   String _icon;
@@ -99,7 +170,9 @@ class Accessory {
       required this.additionalKeys,
       required this.hashesWithTS,
       required this.lastBatteryStatus,
-      required this.locationHistory})
+      required this.locationHistory,
+      this.symmetricKey,
+      this.symmetricKeyDate})
       : _icon = icon,
         _lastLocation = lastLocation,
         super() {
@@ -126,7 +199,9 @@ class Accessory {
         hashesWithTS: hashesWithTS,
         additionalKeys: additionalKeys,
         locationHistory: locationHistory,
-        lastBatteryStatus: lastBatteryStatus);
+        lastBatteryStatus: lastBatteryStatus,
+        symmetricKey: symmetricKey,
+        symmetricKeyDate: symmetricKeyDate);
   }
 
   /// Updates the properties of this accessor with the new values of the [newAccessory].
@@ -140,6 +215,13 @@ class Accessory {
     hashesWithTS = newAccessory.hashesWithTS;
     locationHistory = newAccessory.locationHistory;
     additionalKeys = newAccessory.additionalKeys;
+    symmetricKey = newAccessory.symmetricKey;
+    symmetricKeyDate = newAccessory.symmetricKeyDate;
+
+    // Clear cache if keys changed
+    if (symmetricKey != null) {
+      _cachedRollingKeys.clear();
+    }
   }
 
   /// The last known location of the accessory.
@@ -200,8 +282,11 @@ class Accessory {
         hashesWithTS = json['hashesWithTS'] != null
             ? jsonDecode(json['hashesWithTS']) as Map<String, dynamic>
             : <String, dynamic>{},
-        additionalKeys =
-            json['additionalKeys']?.cast<String>() ?? List.empty() {
+        additionalKeys = json['additionalKeys']?.cast<String>() ?? List.empty(),
+        symmetricKey = json['symmetricKey'],
+        symmetricKeyDate = json['symmetricKeyDate'] != null
+            ? DateTime.fromMillisecondsSinceEpoch(json['symmetricKeyDate'])
+            : null {
     _init();
   }
 
@@ -226,6 +311,8 @@ class Accessory {
         'color': color.value.toRadixString(16).padLeft(8, '0'),
         'hashesWithTS': jsonEncode(hashesWithTS),
         'additionalKeys': additionalKeys,
+        'symmetricKey': symmetricKey,
+        'symmetricKeyDate': symmetricKeyDate?.millisecondsSinceEpoch,
         ...lastBatteryStatus != null
             ? {'lastBatteryStatus': lastBatteryStatus!.name}
             : {}
@@ -261,6 +348,32 @@ class Accessory {
             (hashedPublicKey) => FindMyController.getKeyPair(hashedPublicKey))
         .map((event) => event.getBase64PrivateKey())
         .toList();
+  }
+
+  /// Returns ALL keys (master + rolling) for location retrieval/decryption.
+  /// Uses in-memory cache for rolling keys if available.
+  Future<List<FindMyKeyPair>> getAllKeys() async {
+    logger.d(
+        'getAllKeys called for $id. Cache size: ${_cachedRollingKeys.length}. SymmetricKeyDate: $symmetricKeyDate');
+    List<FindMyKeyPair> allKeys = [];
+
+    // 2. Rolling Keys
+    if (symmetricKey != null && symmetricKey!.isNotEmpty) {
+      allKeys.addAll(_cachedRollingKeys);
+      logger
+          .i('Added ${_cachedRollingKeys.length} cached rolling keys to list.');
+    } else {
+      allKeys.add(await FindMyController.getKeyPair(hashedPublicKey));
+      // Legacy behavior for strictly static additional keys (if any)
+      List<FindMyKeyPair> legacyKeys = await Stream.fromIterable(additionalKeys)
+          .asyncMap((hash) => FindMyController.getKeyPair(hash))
+          .toList();
+      allKeys.addAll(legacyKeys);
+      logger.i('Using legacy keys for $id');
+    }
+
+    logger.i('Returning $allKeys keys for accessory $id');
+    return allKeys;
   }
 
   void addLocationHistoryEntry(FindMyLocationReport report) {

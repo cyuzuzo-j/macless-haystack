@@ -1,1 +1,1 @@
-idf_component_register(SRCS "main.c"  "openhaystack_main.c" PRIV_REQUIRES bt nvs_flash INCLUDE_DIRS ".")
+idf_component_register(SRCS "main.c"  "openhaystack_main.c" PRIV_REQUIRES bt nvs_flash mbedtls INCLUDE_DIRS ".")

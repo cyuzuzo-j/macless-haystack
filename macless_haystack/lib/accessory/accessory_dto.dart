@@ -12,6 +12,8 @@ class AccessoryDTO {
   bool isActive;
   List<String>? additionalKeys;
 
+  int? symmetricKeyDate;
+
   /// Creates a transfer object to serialize to the JSON export format.
   ///
   /// This implements the [toJson] method used by the Dart JSON serializer.
@@ -30,6 +32,7 @@ class AccessoryDTO {
       required this.icon,
       this.oldestRelevantSymmetricKey,
       required this.isActive,
+      this.symmetricKeyDate,
       this.additionalKeys});
 
   /// Creates a transfer object from deserialized JSON data.
@@ -59,8 +62,9 @@ class AccessoryDTO {
         privateKey = json['privateKey'],
         icon = json['icon'],
         oldestRelevantSymmetricKey = json['oldestRelevantSymmetricKey'] ?? '',
-  /*isDeployed is only for migration an can be removed in the future*/
+        /*isDeployed is only for migration an can be removed in the future*/
         isActive = json['isDeployed'] ?? json['isActive'],
+        symmetricKeyDate = json['symmetricKeyDate'],
         additionalKeys = json['additionalKeys']?.cast<String>() ?? List.empty();
 
   /// Creates a JSON map of the serialized transfer object.
@@ -70,14 +74,18 @@ class AccessoryDTO {
   ///   var accessoryDTO = AccessoryDTO(...);
   ///   jsonEncode(accessoryDTO);
   /// ```
-  Map<String, dynamic> toJson() =>  {
-          // Without derivation (skip rolling key params)
-          'id': id,
-          'colorComponents': colorComponents,
-          'name': name,
-          'privateKey': privateKey,
-          'icon': icon,
-          'isActive': isActive,
-          'additionalKeys': additionalKeys
-        };
+  Map<String, dynamic> toJson() => {
+        // Without derivation (skip rolling key params)
+        'id': id,
+        'colorComponents': colorComponents,
+        'name': name,
+        'privateKey': privateKey,
+        'symmetricKey': symmetricKey,
+        'symmetricKeyDate': symmetricKeyDate,
+        'updateInterval': updateInterval,
+        'oldestRelevantSymmetricKey': oldestRelevantSymmetricKey,
+        'icon': icon,
+        'isActive': isActive,
+        'additionalKeys': additionalKeys
+      };
 }

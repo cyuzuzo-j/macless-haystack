@@ -1,5 +1,6 @@
 import 'dart:collection';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -21,6 +22,10 @@ class FindMyController {
   static const _storage = FlutterSecureStorage();
   static final ECCurve_secp224r1 _curveParams = ECCurve_secp224r1();
   static final HashMap _keyCache = HashMap();
+  // NIST P-224 order (curve order used for scalar modulo)
+  static final BigInt _p224Order = BigInt.parse(
+      'ffffffffffffffffffffffffffff16a2e0b8f03e13dd29455c5c2a3d',
+      radix: 16);
 
   static final logger = Logger(
     printer: PrettyPrinter(methodCount: 0),
@@ -32,6 +37,7 @@ class FindMyController {
   static Future<List<FindMyLocationReport>> computeResults(
       List<FindMyKeyPair> keyPairs, String? url) async {
     for (var kp in keyPairs) {
+      logger.i('Loading private key for ${kp.hashedPublicKey}');
       await _loadPrivateKey(kp);
     }
 
@@ -94,9 +100,10 @@ class FindMyController {
     String? privateKey;
     if (!_keyCache.containsKey(keyPair.hashedPublicKey)) {
       privateKey = await _storage.read(key: keyPair.hashedPublicKey);
-      final newKey =
-          _keyCache.putIfAbsent(keyPair.hashedPublicKey, () => privateKey);
-      assert(newKey == privateKey);
+      // Fallback: If not found in storage (e.g. rolling keys), use the key from the object itself.
+      privateKey ??= keyPair.getBase64PrivateKey();
+
+      _keyCache[keyPair.hashedPublicKey] = privateKey;
     } else {
       privateKey = _keyCache[keyPair.hashedPublicKey];
     }
@@ -168,11 +175,166 @@ class FindMyController {
   /// Returns the base64 encoded hashed public key as a [String].
   static String getHashedPublicKey(
       {Uint8List? publicKeyBytes, ECPublicKey? publicKey}) {
-    var pkBytes = publicKeyBytes ?? publicKey!.Q!.getEncoded(false);
+    Uint8List pkBytes;
+    if (publicKeyBytes != null) {
+      pkBytes = publicKeyBytes;
+    } else {
+      final encoded = publicKey!.Q!.getEncoded(true);
+      pkBytes = encoded.sublist(1);
+    }
+
     final shaDigest = SHA256Digest();
     shaDigest.update(pkBytes, 0, pkBytes.lengthInBytes);
     Uint8List out = Uint8List(shaDigest.digestSize);
     shaDigest.doFinal(out, 0);
     return base64Encode(out);
   }
+
+  /// ANSI X9.63 KDF using SHA-256.
+  /// Produces `length` bytes from `inputKey` and `sharedInfo`.
+  static Uint8List ansiX963Kdf(
+      Uint8List inputKey, String sharedInfo, int length) {
+    final List<int> out = [];
+    int counter = 1;
+    final sharedBytes = Uint8List.fromList(utf8.encode(sharedInfo));
+
+    while (out.length < length) {
+      final d = SHA256Digest();
+
+      // counter as 4-byte big-endian
+      final counterBytes = Uint8List(4);
+      final bv = ByteData.view(counterBytes.buffer);
+      bv.setUint32(0, counter, Endian.big);
+
+      d.update(inputKey, 0, inputKey.length);
+      d.update(counterBytes, 0, counterBytes.length);
+      d.update(sharedBytes, 0, sharedBytes.length);
+
+      final tmp = Uint8List(d.digestSize);
+      d.doFinal(tmp, 0);
+      out.addAll(tmp);
+      counter += 1;
+    }
+
+    return Uint8List.fromList(out.sublist(0, length));
+  }
+
+  /// Derives the next symmetric key and the rolling advertisement public key
+  /// (28 byte X-coordinate) from the given master private scalar and the
+  /// current symmetric key.
+  ///
+  /// Returns a tuple: (nextSymmetricKey, rollingAdvertisementKeyBytes)
+  static Map<String, dynamic> deriveNextKeys(
+      BigInt masterPrivateInt, Uint8List currentSymKey,
+      {bool verbose = false}) {
+    // 1) Ratchet the symmetric key
+    final nextSymKey = ansiX963Kdf(currentSymKey, 'update', 32);
+
+    // 2) Derive anti-tracking scalars u and v from SK_new
+    final diversify = ansiX963Kdf(nextSymKey, 'diversify', 72);
+    final uBytes = diversify.sublist(0, 36);
+    final vBytes = diversify.sublist(36);
+
+    final u = pc_utils.decodeBigIntWithSign(1, uBytes);
+    final v = pc_utils.decodeBigIntWithSign(1, vBytes);
+
+    // 3) Compute rolling private scalar: d_i = (d_0 * u + v) mod n
+    BigInt rollingPrivate = (masterPrivateInt * u + v) % _p224Order;
+
+    // 4) Create ECPrivateKey and derive public key
+    final ECPrivateKey priv = ECPrivateKey(rollingPrivate, _curveParams);
+    final ECPublicKey pub = _derivePublicKey(priv);
+
+    // Use compressed encoding and drop prefix byte to get 28-byte X
+    final Uint8List encoded = pub.Q!.getEncoded(true);
+    final Uint8List advKey = encoded.sublist(1);
+
+    if (verbose) {
+      logger.i(
+          'deriveNextKeys: nextSymKey=${base64Encode(nextSymKey)} adv=${base64Encode(advKey)}');
+    }
+
+    return {
+      'nextSymKey': nextSymKey,
+      'advKey': advKey,
+      'privateKey': priv,
+      'publicKey': pub,
+    };
+  }
+
+  /// Given base64-encoded master private key and base64-encoded symmetric key
+  /// this derives `count` successive rolling keys.
+  ///
+  /// The method ratchets the symmetric key before deriving each advertisement
+  /// key (matching the broadcaster logic where SK is updated then used).
+  ///
+  /// Returns a Map contains 'keys' (List<FindMyKeyPair>) and 'nextSymmetricKey' (String base64).
+  static Future<Map<String, dynamic>> deriveRollingKeys(
+      String masterPrivBase64, String symKeyBase64, int count) async {
+    // Run computation in isolate to avoid freezing UI for 2000+ keys
+    Map<String, dynamic> result = await compute(_deriveRollingKeysWorker, {
+      'masterPrivBase64': masterPrivBase64,
+      'symKeyBase64': symKeyBase64,
+      'count': count
+    });
+
+    List<dynamic> rawKeys = result['keys'];
+    List<FindMyKeyPair> out =
+        rawKeys.map((k) => _reconstructKeyPair(k)).toList();
+
+    return {'keys': out, 'nextSymmetricKey': result['nextSymmetricKey']};
+  }
+
+  static FindMyKeyPair _reconstructKeyPair(Map<String, dynamic> data) {
+    BigInt privateKeyInt = BigInt.parse(data['privateKeyInt']);
+    ECPrivateKey privateKey = ECPrivateKey(privateKeyInt, _curveParams);
+
+    // Use the pre-calculated public key bytes to reconstruct the Point directly.
+    // This avoids the expensive G * d multiplication on the main thread.
+    Uint8List pubBytes = data['publicKeyBytes'];
+    ECPoint Q = _curveParams.curve.decodePoint(pubBytes)!;
+    ECPublicKey publicKey = ECPublicKey(Q, _curveParams);
+
+    return FindMyKeyPair(
+        publicKey, data['hashedPublicKey'], privateKey, DateTime.now(), -1);
+  }
+}
+
+/// Worker function that runs in a separate isolate.
+/// Returns List of Maps to avoid passing complex objects.
+Map<String, dynamic> _deriveRollingKeysWorker(Map<String, dynamic> params) {
+  final String masterPrivBase64 = params['masterPrivBase64'];
+  final String symKeyBase64 = params['symKeyBase64'];
+  final int count = params['count'];
+
+  final masterBytes = base64Decode(masterPrivBase64);
+  // We need to access pc_utils. decodeBigIntWithSign is available via import.
+  final masterInt = pc_utils.decodeBigIntWithSign(1, masterBytes);
+  Uint8List sym = Uint8List.fromList(base64Decode(symKeyBase64));
+
+  final List<Map<String, dynamic>> out = [];
+  for (int i = 0; i < count; i++) {
+    final derived = FindMyController.deriveNextKeys(masterInt, sym);
+    // derived: {nextSymKey, advKey, privateKey, publicKey}
+    final ECPublicKey publicKey = derived['publicKey'];
+    final ECPrivateKey privateKey = derived['privateKey'];
+
+    // We can compute hash here or in main thread. Computing here saves main thread time.
+    final hashedPublicKey =
+        FindMyController.getHashedPublicKey(publicKey: publicKey);
+
+    // We send back raw data needed to reconstruct FindMyKeyPair
+    // FindMyKeyPair needs: publicKey (derived from priv), hashedPublicKey, privateKey, date, battery
+    // We just send privateKey d (BigInt) and hash.
+    out.add({
+      'privateKeyInt': privateKey.d.toString(),
+      'hashedPublicKey': hashedPublicKey,
+      // Pass the encoded public key back to avoid re-computation
+      'publicKeyBytes': publicKey.Q!.getEncoded(false),
+    });
+
+    sym = derived['nextSymKey'];
+  }
+
+  return {'keys': out, 'nextSymmetricKey': base64Encode(sym)};
 }

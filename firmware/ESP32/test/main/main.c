@@ -32,12 +32,10 @@ static uint8_t last_adv_data[31];
 static int last_adv_data_len = 0;
 static int adv_data_call_count = 0;
 
-// New: sleep-related capture state
 static uint64_t last_sleep_timeout_us = 0;
 static int sleep_enable_call_count = 0;
 static int deep_sleep_start_call_count = 0;
 
-// Called by the shim when esp_ble_gap_config_adv_data_raw is invoked
 void test_capture_adv_data(const uint8_t *data, uint32_t len)
 {
     if (len > sizeof(last_adv_data)) {
@@ -48,20 +46,17 @@ void test_capture_adv_data(const uint8_t *data, uint32_t len)
     adv_data_call_count++;
 }
 
-// New: called by shim when esp_sleep_enable_timer_wakeup is invoked
 void test_capture_sleep_enable_timer_wakeup(uint64_t time_in_us)
 {
     last_sleep_timeout_us = time_in_us;
     sleep_enable_call_count++;
 }
 
-// New: called by shim when esp_deep_sleep_start is invoked
 void test_capture_deep_sleep_start(void)
 {
     deep_sleep_start_call_count++;
 }
 
-// Optional helpers for tests (if/when you need them)
 static void reset_sleep_captures(void)
 {
     last_sleep_timeout_us = 0;

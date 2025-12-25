@@ -89,7 +89,33 @@ class AccessoryListItemState extends State<AccessoryListItem> {
               ),
               subtitle: SingleChildScrollView(
                 scrollDirection: Axis.vertical,
-                child: Text(locationString + dateString),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(locationString + dateString),
+                    if (widget.accessory.symmetricKey != null &&
+                        widget.accessory.symmetricKey!.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4.0),
+                        child: Row(
+                          children: [
+                            Icon(Icons.autorenew,
+                                size: 14,
+                                color: Theme.of(context).colorScheme.secondary),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Rolling Code #${widget.accessory.additionalKeys.length}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Theme.of(context).colorScheme.secondary,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
               ),
               trailing: widget.distance,
               dense: true,
