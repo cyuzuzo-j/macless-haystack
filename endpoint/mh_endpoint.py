@@ -192,9 +192,9 @@ if __name__ == "__main__":
 
         logger.info("serving at " + address + " over HTTPS")
     else:
-        logger.info("Certificate file " + mh_config.getCertFile() +
-                    " not found, so not using SSL")
-        logger.info("serving at " + address + " over HTTP")
+        logger.info("Certificate file not found, please provide a valid certificate file")
+        logger.error("Exiting program")
+        sys.exit()
     user = mh_config.getEndpointUser()
     passw = mh_config.getEndpointPass()
     if (user is None or user == "") and (passw is None or passw == ""):

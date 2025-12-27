@@ -32,16 +32,6 @@
  */
 #define USE_ROLLING_KEYS
 
-/* Delay between advertisement. Advertisment will only be transmitted for a short period of time (20ms) and the device will go to sleep.
-Higher delay = less power consumption, but more inaccurate tracking
- */
-#define DELAY_IN_S 60
-
-/* Define how often (long) a key will be reused after switching to the next one
-This is for using less keys after all. The interval for one key is (DELAY_IN_S * REUSE_CYCLES => 60s * 30 cycles = changes key every 30 min)
-Smaller number of cycles = key changes more often, but more keys needed.
- */
-#define REUSE_CYCLES 30
 
 static const char *LOG_TAG = "macless_haystack";
 
@@ -210,25 +200,6 @@ void derive_public_key_bytes(const uint8_t *priv_key,
         }
     }
 
-    /* --- DIAGNOSTIC CHECKS --- */
-
-    // Check 1: Is the key exactly ZERO?
-    if (mbedtls_mpi_cmp_int(&d, 0) == 0) {
-        ESP_LOGE(LOG_TAG, "CRITICAL ERROR: Private key is ZERO!");
-        ret = MBEDTLS_ERR_ECP_INVALID_KEY; 
-        goto cleanup;
-    }
-
-    // Check 2: Is the key too large? (d >= N)
-    if (mbedtls_mpi_cmp_mpi(&d, &grp.N) >= 0) {
-        ESP_LOGE(LOG_TAG, "CRITICAL ERROR: Private key is larger than Curve Order!");
-        ESP_LOGE(LOG_TAG, "This usually means the Byte Order (Endianness) is wrong.");
-        ret = MBEDTLS_ERR_ECP_INVALID_KEY;
-        goto cleanup;
-    }
-    
-    /* ----------------------------- */
-
     /* Q = d * G */
     /* Use CTR-DRBG for RNG/blinding to avoid build-config related failures */
     {
@@ -297,53 +268,17 @@ void roll_key_and_update_state() {
     uint8_t v_bytes[36];
     uint8_t rolling_priv_bytes[28];
     ESP_LOGI(LOG_TAG, "Rolling keys...");
-    ESP_LOGI(LOG_TAG, "Current Symmetric Key:");
-    {
-        char key_str[32 * 2 + 1];
-        for (int i = 0; i < 32; i++) {
-            sprintf(&key_str[i * 2], "%02x", current_symmetric_key[i]);
-        }
-        key_str[32 * 2] = '\0';
-        ESP_LOGI(LOG_TAG, "%s", key_str);
-    }
+
     // 1. Update Symmetric Key: SK_new = KDF(SK_old, "update", 32)
     ansi_x963_kdf(current_symmetric_key, 32, "update", 32, next_sym_key);
-    // Update global state immediately
-    memcpy(current_symmetric_key, next_sym_key, 32);
-    ESP_LOGI(LOG_TAG, "New Symmetric Key:");
-    {
-        char key_str[32 * 2 + 1];
-        for (int i = 0; i < 32; i++) {
-            sprintf(&key_str[i * 2], "%02x", current_symmetric_key[i]);
-        }
-        key_str[32 * 2] = '\0';
-        ESP_LOGI(LOG_TAG, "%s", key_str);
-    }
 
+    // global state update
+    memcpy(current_symmetric_key, next_sym_key, 32);
 
     // 2. Derive u, v: KDF(SK_new, "diversify", 72)
     ansi_x963_kdf(next_sym_key, 32, "diversify", 72, diversify_material);
     memcpy(u_bytes, diversify_material, 36);
     memcpy(v_bytes, diversify_material + 36, 36);
-    // Debug print u, v
-    ESP_LOGI(LOG_TAG, "u:");
-    {
-        char u_str[36 * 2 + 1];
-        for (int i = 0; i < 36; i++) {
-            sprintf(&u_str[i * 2], "%02x", u_bytes[i]);
-        }
-        u_str[36 * 2] = '\0';
-        ESP_LOGI(LOG_TAG, "%s", u_str);
-    }
-    ESP_LOGI(LOG_TAG, "v:");
-    {
-        char v_str[36 * 2 + 1];
-        for (int i = 0; i < 36; i++) {
-            sprintf(&v_str[i * 2], "%02x", v_bytes[i]);
-        }
-        v_str[36 * 2] = '\0';
-        ESP_LOGI(LOG_TAG, "%s", v_str);
-    }
 
     // 3. Math: d_i = (d_0 * u + v) mod n
     mbedtls_mpi d_0, u, v, n, d_i, temp;
@@ -352,7 +287,6 @@ void roll_key_and_update_state() {
 
     mbedtls_mpi_read_string(&n, 16, P224_ORDER_HEX);
 
-    // Use the variable loaded from NVS instead of hardcoded const
     mbedtls_mpi_read_binary(&d_0, master_private_key, 28);
     mbedtls_mpi_read_binary(&u, u_bytes, 36);
     mbedtls_mpi_read_binary(&v, v_bytes, 36);
@@ -382,15 +316,6 @@ void roll_key_and_update_state() {
 
     // 4. Derive Public Key
     derive_public_key_bytes(rolling_priv_bytes, 28, current_public_key);
-    ESP_LOGI(LOG_TAG, "New Public Key:");
-    {
-        char key_str[28 * 2 + 1];
-        for (int i = 0; i < 28; i++) {
-            sprintf(&key_str[i * 2], "%02x", current_public_key[i]);
-        }
-        key_str[28 * 2] = '\0';
-        ESP_LOGI(LOG_TAG, "%s", key_str);
-    }
 }
 
 #endif // USE_ROLLING_KEYS
@@ -538,7 +463,7 @@ int openhaystack_init(void)
     return 0;
 }
 
-void openhaystack_run(void)
+void openhaystack_run(uint8_t delay_in_s, uint8_t reuse_cycles)
 {
     esp_err_t status;
 
@@ -588,7 +513,7 @@ void openhaystack_run(void)
     esp_ble_gap_stop_advertising(); // Stop immediately after first beacon
 
     // CYCLE MANAGEMENT
-    if (cycle >= REUSE_CYCLES)
+    if (cycle >= reuse_cycles)
     {
         ESP_LOGI(LOG_TAG, "Max cycles %d are reached. Changing key ", cycle);
         
@@ -615,6 +540,6 @@ void openhaystack_run(void)
     vTaskDelay(10);
     ESP_LOGI(LOG_TAG, "Going to sleep");
     vTaskDelay(10);
-    esp_sleep_enable_timer_wakeup(DELAY_IN_S * 1000000); // sleep
+    esp_sleep_enable_timer_wakeup(delay_in_s * 1000000); // sleep
     esp_deep_sleep_start();
 }

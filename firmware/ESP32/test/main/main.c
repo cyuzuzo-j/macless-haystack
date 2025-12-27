@@ -16,6 +16,8 @@
 #include "esp_bt_main.h"
 #include "esp_bt_defs.h"
 
+
+
 static uint8_t __attribute__((unused)) test_public_key[28] = {
     0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, // First 6 bytes
     0xDE, 0xF0, 0x11, 0x22, 0x33, 0x44, // Bytes 6-11
@@ -80,9 +82,8 @@ TEST_TEAR_DOWN(openhaystack_integration)
 /**
  * @brief Test that multiple openhaystack_run calls use the same advertisement data
  * 
- * This proves non-rolling behavior at the system level by showing that
- * esp_ble_gap_config_adv_data_raw receives identical data across multiple runs
- * within the same key cycle.
+ * This proves non-rolling behavior by showing that
+ * esp_ble_gap_config_adv_data_raw is called with identical data across multiple runs. 
  */
 TEST(openhaystack_integration, multiple_runs_same_adv_data_within_cycle)
 {
@@ -90,19 +91,27 @@ TEST(openhaystack_integration, multiple_runs_same_adv_data_within_cycle)
 
     uint8_t first_call_adv_data[31];
 
-    for (int i = 0; i < 3; i++) {
-        openhaystack_run();
+    const uint8_t TEST_REUSE_CYCLES = 5;
+    const uint8_t TEST_DELAY_S = 1;
+
+    for (int i = 0; i <= TEST_REUSE_CYCLES + 1; i++) {
+        openhaystack_run(TEST_DELAY_S, TEST_REUSE_CYCLES);
 
         // On first iteration, store data
         if (i == 0) {
             memcpy(first_call_adv_data, last_adv_data, last_adv_data_len);
-        } else {
-            // Compare subsequent calls to first call
-            TEST_ASSERT_EQUAL_UINT8_ARRAY(
+
+        } else if (i <= TEST_REUSE_CYCLES) {
+            // Runs 1..TEST_REUSE_CYCLES should match Run 0
+            TEST_ASSERT_EQUAL_UINT8_ARRAY_MESSAGE(
                 first_call_adv_data,
                 last_adv_data,
-                last_adv_data_len
+                last_adv_data_len,
+                "Advertisement data should match during reuse window"
             );
+        } else {
+            // i == TEST_REUSE_CYCLES + 1 -> Should have rolled.
+            TEST_ASSERT_NOT_EQUAL(0, memcmp(first_call_adv_data, last_adv_data, last_adv_data_len));
         }
     }
 }

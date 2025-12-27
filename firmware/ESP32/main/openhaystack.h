@@ -24,7 +24,7 @@ int openhaystack_init(void);
  * This function advertises the beacon once, manages key rotation,
  * and prepares for deep sleep.
  */
-void openhaystack_run(void);
+void openhaystack_run(uint8_t delay_in_s, uint8_t reuse_cycles);
 
 /**
  * @brief Set the BLE address from a public key

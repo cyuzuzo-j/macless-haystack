@@ -8,7 +8,7 @@ idf_component_register("main.c"
          "shims/esp_bt_teardown_test_shim.c"
     INCLUDE_DIRS "."
                  "../../main"
-    PRIV_REQUIRES bt nvs_flash unity
+    PRIV_REQUIRES bt nvs_flash unity mbedtls
 )
 
 target_link_libraries(${COMPONENT_LIB} INTERFACE
